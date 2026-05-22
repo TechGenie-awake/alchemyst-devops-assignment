@@ -1,0 +1,22 @@
+services:
+  engine:
+    build: ./engine
+    ports:
+      - "3111:3111"   # only the API is published; :49134 stays on the internal network
+    restart: unless-stopped
+
+  caller-worker:
+    build: ../workers/caller-worker
+    environment:
+      - III_URL=ws://engine:49134
+    depends_on:
+      - engine
+    restart: unless-stopped
+
+  inference-worker:
+    build: ../workers/inference-worker
+    environment:
+      - III_URL=ws://engine:49134
+    depends_on:
+      - engine
+    restart: unless-stopped

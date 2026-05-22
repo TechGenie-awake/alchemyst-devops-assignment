@@ -1,0 +1,8 @@
+# Copy this file to terraform.tfvars and fill in your values.
+project_id = "your-gcp-project-id"
+repo_url   = "https://github.com/your-username/your-repo.git"
+
+# Optional overrides (defaults shown):
+# region      = "us-central1"
+# zone        = "us-central1-a"
+# repo_branch = "main"
