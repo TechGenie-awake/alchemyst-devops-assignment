@@ -361,8 +361,52 @@ bug. Two things showed up:
 The proper fix is `depends_on = [aws_route_table_association.private]`
 on the two worker instances. Terraform now refuses to launch them until
 the private subnet's NAT route exists, which guarantees the boot
-script's first `apt-get` has working egress. The retry loop stays as
-defense-in-depth, but it's no longer load-bearing.
+script's first `apt-get` has working egress.
+
+### And then I found the *real* bug
+
+I did a second `terraform destroy && terraform apply` to verify the
+`depends_on` fix. Both workers failed again — same symptom, `docker.io`
+not installable, no caller-worker, API returns 404.
+
+This time I actually read what `apt-get update` was doing. It prints a
+wall of `W: Failed to fetch...` warnings when it can't reach the
+mirrors — and then **exits with code 0**. apt's behavior is to fall
+back to the cached index, warn, and call it a success.
+
+So my retry loop was a no-op the whole time:
+
+```bash
+# this looks like a retry, but...
+for i in 1 2 3 4 5 6; do apt-get update && break || sleep 15; done
+# ...the very first iteration "succeeds" with an empty index,
+# `break` fires, and we move on to apt-get install which finds nothing.
+```
+
+The earlier rebuild that "worked" was the run where the inference VM
+booted slightly later than the caller and got lucky with NAT timing.
+Pure coincidence, not the retry loop.
+
+Real fix: probe a known-good HTTP endpoint with `curl` (which returns
+non-zero on failure, unlike apt-get update) before touching apt:
+
+```bash
+for i in $(seq 1 60); do
+  curl -fsS --max-time 5 http://archive.ubuntu.com/ubuntu/ > /dev/null && break
+  sleep 5
+done
+apt-get update
+apt-get install -y docker.io git
+```
+
+After this, a clean `terraform apply` brings the stack up correctly,
+the curl returns HTTP 200, and reproducibility is genuinely proven —
+not just probabilistically.
+
+Lesson: when you're using a command's exit code as a signal, make sure
+that command actually signals failure the way you think it does.
+`apt-get update` is permissive by design — fine for a Dockerfile where
+the network is stable, treacherous in cloud user-data where it isn't.
 
 Also worth noting: the public IP changes on every rebuild
 (`18.206.93.228` first time, `100.54.121.12` after destroy/apply).
