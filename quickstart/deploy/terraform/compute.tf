@@ -54,6 +54,10 @@ resource "aws_instance" "caller" {
     engine_ip   = var.engine_private_ip
   })
 
+  # Don't launch until the private subnet's NAT route is in place,
+  # otherwise the boot script's apt-get can fail before NAT is ready.
+  depends_on = [aws_route_table_association.private]
+
   tags = { Name = "${var.project_name}-caller-worker" }
 }
 
@@ -75,6 +79,10 @@ resource "aws_instance" "inference" {
     repo_branch = var.repo_branch
     engine_ip   = var.engine_private_ip
   })
+
+  # Don't launch until the private subnet's NAT route is in place,
+  # otherwise the boot script's apt-get can fail before NAT is ready.
+  depends_on = [aws_route_table_association.private]
 
   tags = { Name = "${var.project_name}-inference-worker" }
 }
