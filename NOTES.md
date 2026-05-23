@@ -342,3 +342,31 @@ HTTP 200, ~28s round trip
 The response is rambly because the model is `gemma-3-270m` — quality is
 not the point of this assignment, the network path is.
 
+### Retrospective: I caught the NAT race twice
+
+I tested reproducibility by running `terraform destroy && terraform apply`
+on a clean slate, which is the only way to actually find this class of
+bug. Two things showed up:
+
+1. **The NAT Gateway is the slow resource.** EC2 instances finished
+   creating in ~16s; the NAT Gateway took ~1m48s. So on a fresh apply
+   the worker VMs boot first, with no internet egress, and try to
+   `apt-get update` against a route that doesn't exist yet. That's the
+   bug I'd already partially patched with the retry loop in the
+   user_data script.
+2. **The retry loop alone is too tight.** 6 × 15s = 90s of patience.
+   NAT took 108s. On the rebuild I was within seconds of failing again
+   — pure luck that I didn't.
+
+The proper fix is `depends_on = [aws_route_table_association.private]`
+on the two worker instances. Terraform now refuses to launch them until
+the private subnet's NAT route exists, which guarantees the boot
+script's first `apt-get` has working egress. The retry loop stays as
+defense-in-depth, but it's no longer load-bearing.
+
+Also worth noting: the public IP changes on every rebuild
+(`18.206.93.228` first time, `100.54.121.12` after destroy/apply).
+That's why the README uses `terraform output api_url` instead of
+hardcoding an IP — anyone redeploying from scratch will get a different
+one.
+
