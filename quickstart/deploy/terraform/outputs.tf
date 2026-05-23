@@ -1,29 +1,29 @@
 output "engine_public_ip" {
   description = "Public IP of the engine/gateway VM."
-  value       = google_compute_instance.engine.network_interface[0].access_config[0].nat_ip
+  value       = aws_instance.engine.public_ip
 }
 
 output "api_url" {
   description = "The JSON inference API endpoint."
-  value       = "http://${google_compute_instance.engine.network_interface[0].access_config[0].nat_ip}:3111/v1/chat/completions"
+  value       = "http://${aws_instance.engine.public_ip}:3111/v1/chat/completions"
 }
 
-output "engine_internal_ip" {
+output "engine_private_ip" {
   description = "Private IP the workers use to reach the engine."
-  value       = var.engine_internal_ip
+  value       = aws_instance.engine.private_ip
 }
 
-output "ssh_engine" {
-  description = "Command to SSH into the engine VM."
-  value       = "gcloud compute ssh alchemyst-engine --zone ${var.zone} --tunnel-through-iap"
+output "ssm_engine" {
+  description = "Open an SSM session on the engine VM."
+  value       = "aws ssm start-session --target ${aws_instance.engine.id} --region ${var.region}"
 }
 
-output "ssh_caller" {
-  description = "Command to SSH into the caller-worker VM."
-  value       = "gcloud compute ssh alchemyst-caller-worker --zone ${var.zone} --tunnel-through-iap"
+output "ssm_caller" {
+  description = "Open an SSM session on the caller-worker VM."
+  value       = "aws ssm start-session --target ${aws_instance.caller.id} --region ${var.region}"
 }
 
-output "ssh_inference" {
-  description = "Command to SSH into the inference-worker VM."
-  value       = "gcloud compute ssh alchemyst-inference-worker --zone ${var.zone} --tunnel-through-iap"
+output "ssm_inference" {
+  description = "Open an SSM session on the inference-worker VM."
+  value       = "aws ssm start-session --target ${aws_instance.inference.id} --region ${var.region}"
 }

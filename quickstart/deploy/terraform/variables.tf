@@ -1,18 +1,13 @@
-variable "project_id" {
-  description = "GCP project ID to deploy into."
-  type        = string
-}
-
 variable "region" {
-  description = "GCP region."
+  description = "AWS region."
   type        = string
-  default     = "us-central1"
+  default     = "us-east-1"
 }
 
-variable "zone" {
-  description = "GCP zone for the VMs."
+variable "project_name" {
+  description = "Prefix used to name and tag all resources."
   type        = string
-  default     = "us-central1-a"
+  default     = "alchemyst"
 }
 
 variable "repo_url" {
@@ -23,35 +18,47 @@ variable "repo_url" {
 variable "repo_branch" {
   description = "Git branch to deploy."
   type        = string
-  default     = "main"
+  default     = "master"
 }
 
-variable "subnet_cidr" {
-  description = "CIDR range for the private subnet."
+variable "vpc_cidr" {
+  description = "VPC CIDR."
   type        = string
-  default     = "10.10.0.0/24"
+  default     = "10.10.0.0/16"
 }
 
-variable "engine_internal_ip" {
-  description = "Static internal IP for the engine VM. Must be inside subnet_cidr."
+variable "public_subnet_cidr" {
+  description = "CIDR for the public subnet (engine + NAT Gateway)."
   type        = string
-  default     = "10.10.0.10"
+  default     = "10.10.1.0/24"
 }
 
-variable "machine_type_engine" {
-  description = "Machine type for the engine/gateway VM."
+variable "private_subnet_cidr" {
+  description = "CIDR for the private subnet (workers)."
   type        = string
-  default     = "e2-small"
+  default     = "10.10.2.0/24"
 }
 
-variable "machine_type_caller" {
-  description = "Machine type for the caller-worker VM."
+variable "engine_private_ip" {
+  description = "Static private IP for the engine VM. Must be inside public_subnet_cidr."
   type        = string
-  default     = "e2-small"
+  default     = "10.10.1.10"
 }
 
-variable "machine_type_inference" {
-  description = "Machine type for the inference-worker VM (needs RAM for the model)."
+variable "instance_type_engine" {
+  description = "EC2 instance type for the engine/gateway VM."
   type        = string
-  default     = "e2-standard-2"
+  default     = "t3.small"
+}
+
+variable "instance_type_caller" {
+  description = "EC2 instance type for the caller-worker VM."
+  type        = string
+  default     = "t3.small"
+}
+
+variable "instance_type_inference" {
+  description = "EC2 instance type for the inference-worker VM (needs RAM for the model)."
+  type        = string
+  default     = "m7i-flex.large"
 }

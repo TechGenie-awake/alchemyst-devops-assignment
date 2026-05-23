@@ -1,92 +1,80 @@
-# Reserve a fixed internal IP for the engine so the worker VMs know where
-# to connect (III_URL) without waiting for the engine to be created first.
-resource "google_compute_address" "engine_internal" {
-  name         = "alchemyst-engine-ip"
-  address_type = "INTERNAL"
-  subnetwork   = google_compute_subnetwork.subnet.id
-  address      = var.engine_internal_ip
-  region       = var.region
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"] # Canonical
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+  }
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
 }
 
-data "google_compute_image" "ubuntu" {
-  family  = "ubuntu-2204-lts"
-  project = "ubuntu-os-cloud"
-}
+# --- Engine VM: public-facing gateway. Hosts the JSON API. ---
+resource "aws_instance" "engine" {
+  ami                         = data.aws_ami.ubuntu.id
+  instance_type               = var.instance_type_engine
+  subnet_id                   = aws_subnet.public.id
+  private_ip                  = var.engine_private_ip
+  associate_public_ip_address = true
+  vpc_security_group_ids      = [aws_security_group.engine.id]
+  iam_instance_profile        = aws_iam_instance_profile.instance.name
 
-# --- Engine VM: the public-facing gateway. Hosts the JSON API. ---
-resource "google_compute_instance" "engine" {
-  name         = "alchemyst-engine"
-  machine_type = var.machine_type_engine
-  zone         = var.zone
-  tags         = ["engine", "iii"]
-
-  boot_disk {
-    initialize_params {
-      image = data.google_compute_image.ubuntu.self_link
-      size  = 20
-    }
+  root_block_device {
+    volume_size = 20
+    volume_type = "gp3"
   }
 
-  network_interface {
-    subnetwork = google_compute_subnetwork.subnet.id
-    network_ip = google_compute_address.engine_internal.address
-    access_config {} # ephemeral public IP
-  }
-
-  metadata_startup_script = templatefile("${path.module}/startup-engine.sh", {
+  user_data = templatefile("${path.module}/startup-engine.sh", {
     repo_url    = var.repo_url
     repo_branch = var.repo_branch
   })
+
+  tags = { Name = "${var.project_name}-engine" }
 }
 
 # --- Caller-worker VM: private, no public IP. ---
-resource "google_compute_instance" "caller" {
-  name         = "alchemyst-caller-worker"
-  machine_type = var.machine_type_caller
-  zone         = var.zone
-  tags         = ["worker", "iii"]
+resource "aws_instance" "caller" {
+  ami                    = data.aws_ami.ubuntu.id
+  instance_type          = var.instance_type_caller
+  subnet_id              = aws_subnet.private.id
+  vpc_security_group_ids = [aws_security_group.worker.id]
+  iam_instance_profile   = aws_iam_instance_profile.instance.name
 
-  boot_disk {
-    initialize_params {
-      image = data.google_compute_image.ubuntu.self_link
-      size  = 20
-    }
+  root_block_device {
+    volume_size = 20
+    volume_type = "gp3"
   }
 
-  network_interface {
-    subnetwork = google_compute_subnetwork.subnet.id
-    # no access_config block => no public IP
-  }
-
-  metadata_startup_script = templatefile("${path.module}/startup-caller.sh", {
+  user_data = templatefile("${path.module}/startup-caller.sh", {
     repo_url    = var.repo_url
     repo_branch = var.repo_branch
-    engine_ip   = var.engine_internal_ip
+    engine_ip   = var.engine_private_ip
   })
+
+  tags = { Name = "${var.project_name}-caller-worker" }
 }
 
-# --- Inference-worker VM: private, no public IP. Larger (model needs RAM). ---
-resource "google_compute_instance" "inference" {
-  name         = "alchemyst-inference-worker"
-  machine_type = var.machine_type_inference
-  zone         = var.zone
-  tags         = ["worker", "iii"]
+# --- Inference-worker VM: private, larger (model needs RAM). ---
+resource "aws_instance" "inference" {
+  ami                    = data.aws_ami.ubuntu.id
+  instance_type          = var.instance_type_inference
+  subnet_id              = aws_subnet.private.id
+  vpc_security_group_ids = [aws_security_group.worker.id]
+  iam_instance_profile   = aws_iam_instance_profile.instance.name
 
-  boot_disk {
-    initialize_params {
-      image = data.google_compute_image.ubuntu.self_link
-      size  = 30
-    }
+  root_block_device {
+    volume_size = 30
+    volume_type = "gp3"
   }
 
-  network_interface {
-    subnetwork = google_compute_subnetwork.subnet.id
-    # no access_config block => no public IP
-  }
-
-  metadata_startup_script = templatefile("${path.module}/startup-inference.sh", {
+  user_data = templatefile("${path.module}/startup-inference.sh", {
     repo_url    = var.repo_url
     repo_branch = var.repo_branch
-    engine_ip   = var.engine_internal_ip
+    engine_ip   = var.engine_private_ip
   })
+
+  tags = { Name = "${var.project_name}-inference-worker" }
 }

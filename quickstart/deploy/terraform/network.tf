@@ -1,31 +1,69 @@
-# Custom-mode VPC: no auto subnets, we define exactly one private subnet.
-resource "google_compute_network" "vpc" {
-  name                    = "alchemyst-vpc"
-  auto_create_subnetworks = false
-  depends_on              = [google_project_service.compute]
+resource "aws_vpc" "main" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  tags                 = { Name = "${var.project_name}-vpc" }
 }
 
-resource "google_compute_subnetwork" "subnet" {
-  name                     = "alchemyst-subnet"
-  ip_cidr_range            = var.subnet_cidr
-  region                   = var.region
-  network                  = google_compute_network.vpc.id
-  private_ip_google_access = true
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.main.id
+  tags   = { Name = "${var.project_name}-igw" }
 }
 
-# Cloud Router + Cloud NAT: lets the private VMs reach the internet
-# (clone the repo, pull base images, download the model) WITHOUT being
-# reachable from the internet themselves.
-resource "google_compute_router" "router" {
-  name    = "alchemyst-router"
-  region  = var.region
-  network = google_compute_network.vpc.id
+resource "aws_subnet" "public" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = var.public_subnet_cidr
+  availability_zone = "${var.region}a"
+  tags              = { Name = "${var.project_name}-public" }
 }
 
-resource "google_compute_router_nat" "nat" {
-  name                               = "alchemyst-nat"
-  router                             = google_compute_router.router.name
-  region                             = var.region
-  nat_ip_allocate_option             = "AUTO_ONLY"
-  source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
+resource "aws_subnet" "private" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = var.private_subnet_cidr
+  availability_zone = "${var.region}a"
+  tags              = { Name = "${var.project_name}-private" }
+}
+
+# NAT Gateway so private workers can reach the internet (clone the repo,
+# pull base images, download the model) without being reachable themselves.
+resource "aws_eip" "nat" {
+  domain = "vpc"
+  tags   = { Name = "${var.project_name}-nat-eip" }
+}
+
+resource "aws_nat_gateway" "nat" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public.id
+  tags          = { Name = "${var.project_name}-nat" }
+  depends_on    = [aws_internet_gateway.igw]
+}
+
+# Public subnet -> IGW
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.igw.id
+  }
+  tags = { Name = "${var.project_name}-public-rt" }
+}
+
+resource "aws_route_table_association" "public" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
+}
+
+# Private subnet -> NAT Gateway (egress only, no inbound from internet)
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.main.id
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.nat.id
+  }
+  tags = { Name = "${var.project_name}-private-rt" }
+}
+
+resource "aws_route_table_association" "private" {
+  subnet_id      = aws_subnet.private.id
+  route_table_id = aws_route_table.private.id
 }

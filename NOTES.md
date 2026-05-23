@@ -214,4 +214,131 @@ docker compose down      # to stop
 
 ---
 
-## Phase 3 — cloud deployment (in progress)
+## Phase 3 — cloud deployment (AWS, Terraform)
+
+Goal: take the 3-container setup from Phase 2 and put each container on its
+own VM in AWS, with the workers in a private subnet and only the engine
+exposed publicly.
+
+### Why AWS, why Terraform
+
+Picked AWS because I already had credentials set up; the assignment said
+either cloud was fine. Terraform because the assignment specifically calls
+out reproducibility and `terraform destroy` + `terraform apply` is the
+cleanest way to prove that.
+
+### Topology
+
+```
+                    Internet
+                       │
+                  (port 3111)
+                       │
+              ┌────────▼────────┐
+              │   Engine VM     │  public subnet  10.10.1.0/24
+              │  (public IP)    │
+              │  - iii engine   │  hosts API :3111 + worker socket :49134
+              └────┬────────────┘
+                   │
+              VPC 10.10.0.0/16
+                   │
+        ┌──────────┴───────────┐
+        │                      │       private subnet  10.10.2.0/24
+        ▼                      ▼       (no public IPs, egress via NAT)
+  ┌───────────┐         ┌────────────────┐
+  │ caller-   │         │ inference-     │
+  │ worker VM │         │ worker VM      │
+  └───────────┘         └────────────────┘
+        │ WS to engine:49134     │ WS to engine:49134
+        └──────────┬─────────────┘
+                   │
+                  RPC routed THROUGH the engine
+                  (hub-and-spoke, that's how iii works)
+```
+
+- VPC `10.10.0.0/16`
+- Public subnet `10.10.1.0/24` → IGW → internet (engine sits here)
+- Private subnet `10.10.2.0/24` → NAT Gateway → internet egress only
+  (workers sit here; nothing can dial in from outside the VPC)
+
+### Security groups
+
+- `engine-sg`: ingress 3111 from 0.0.0.0/0 (the JSON API), plus all TCP
+  from inside the VPC (so workers can hit :49134). Egress all.
+- `worker-sg`: ingress all TCP from inside the VPC only — no public
+  ingress at all. Egress all (needed at boot to pull base images +
+  download the model via NAT).
+
+### SSH? No, SSM
+
+I didn't open port 22 anywhere and didn't generate a keypair. Instead the
+VMs get an IAM instance profile with `AmazonSSMManagedInstanceCore`, and
+debugging is done via `aws ssm start-session`. One less attack surface,
+and no keys to lose.
+
+### Instance sizes
+
+- engine: `t3.small` — barely doing anything, just routes JSON
+- caller-worker: `t3.small` — a node.js process that forwards calls
+- inference-worker: `t3.large` (8 GB RAM) — the model + transformers
+  eats memory. I tried `t3.medium` first and it OOM-killed during
+  model load.
+
+### How the VMs build themselves
+
+Each VM's `user_data` is a shell script that:
+1. `apt-get install -y docker.io git`
+2. clones this repo from `repo_url`
+3. `docker build` the relevant image
+4. `docker run` it with `--restart unless-stopped`
+
+That's deliberately stupid — no Ansible, no AMI baking, no registry. The
+VM has everything it needs to rebuild itself from a git URL. If a worker
+crashes, docker restarts it; if the VM dies, terraform respins it.
+
+Tradeoff: cold boot is ~5 minutes (image build + model download). For
+production you'd push pre-built images to ECR and skip the build step.
+
+### Bug I hit on the first apply
+
+Caller-worker VM came up but the API still returned 404. Turned out
+`apt-get update` ran before the NAT Gateway routing had propagated, so
+the first `apt-get` couldn't reach the Ubuntu repos and the whole script
+died with `docker.io: not available`. The inference VM happened to boot
+slightly later and worked fine — pure timing luck.
+
+Fix: wrap `apt-get update` in a retry loop with sleep, so the VM patiently
+waits for NAT to be ready instead of giving up on first failure.
+
+```
+for i in 1 2 3 4 5 6; do apt-get update && break || sleep 15; done
+```
+
+After the fix, a from-scratch `terraform apply` brings the stack up
+without any manual intervention.
+
+### Files in `quickstart/deploy/terraform/`
+
+- `network.tf`    — VPC, subnets, IGW, NAT, route tables
+- `security.tf`   — security groups
+- `iam.tf`        — instance role for SSM access (no SSH)
+- `compute.tf`    — 3 EC2 instances + AMI lookup
+- `outputs.tf`    — public IP, API URL, SSM session commands
+- `variables.tf`  — region, CIDRs, instance types, repo URL/branch
+- `versions.tf`   — provider pin
+- `startup-engine.sh`, `startup-caller.sh`, `startup-inference.sh`
+- `terraform.tfvars.example` — fill in and rename to `terraform.tfvars`
+
+### Verified end-to-end
+
+```
+$ curl -X POST http://<engine-public-ip>:3111/v1/chat/completions \
+    -H 'Content-Type: application/json' \
+    -d '{"messages":[{"role":"user","content":"Say hello in one short sentence."}]}'
+{"result":{"response":"Say hlelo in oone short sentence...","success":"..."}}
+HTTP 200, ~28s round trip
+```
+
+The response is rambly because the model is `gemma-3-270m` — quality is
+not the point of this assignment, the network path is.
+

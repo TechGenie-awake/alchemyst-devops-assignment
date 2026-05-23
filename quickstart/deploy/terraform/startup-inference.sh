@@ -3,7 +3,9 @@
 exec > /var/log/startup.log 2>&1
 set -euxo pipefail
 
-apt-get update
+# Retry apt-get update: private subnet egress goes through the NAT
+# Gateway, which can take a moment to be ready when the VM boots.
+for i in 1 2 3 4 5 6; do apt-get update && break || sleep 15; done
 apt-get install -y docker.io git
 systemctl enable --now docker
 
