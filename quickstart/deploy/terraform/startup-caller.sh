@@ -3,9 +3,14 @@
 exec > /var/log/startup.log 2>&1
 set -euxo pipefail
 
-# Retry apt-get update: private subnet egress goes through the NAT
-# Gateway, which can take a moment to be ready when the VM boots.
-for i in 1 2 3 4 5 6; do apt-get update && break || sleep 15; done
+# Wait for NAT egress to actually work before touching apt. apt-get update
+# exits 0 even when every source fails (just prints W:), so probing apt
+# directly isn't reliable. Probe a known-good HTTP endpoint instead.
+for i in $(seq 1 60); do
+  curl -fsS --max-time 5 http://archive.ubuntu.com/ubuntu/ > /dev/null && break
+  sleep 5
+done
+apt-get update
 apt-get install -y docker.io git
 systemctl enable --now docker
 
